@@ -1,0 +1,9 @@
+# Colab already has tensorflow, numpy, pandas, scikit-learn, matplotlib preinstalled —
+# do NOT reinstall those here, it drags in a newer protobuf that breaks Colab's
+# own preinstalled Google packages. Only install what's actually missing.
+mlflow>=2.12.0,<2.20.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+python-dotenv>=1.0.0
+shap>=0.45.0
+protobuf<5.0.0,>=4.25.3
