@@ -77,9 +77,12 @@ def build_lstm(input_dim: int):
     return model
 
 
+ANCHOR_COL = "aqi_lag_1h"  # current AQI reading — used as the reconstruction anchor for delta models
+
+
 def train_horizon(df: pd.DataFrame, horizon_name: str, target_col: str):
     feature_cols = get_feature_cols(horizon_name)
-    data = df.dropna(subset=feature_cols + [target_col]).copy()
+    data = df.dropna(subset=feature_cols + [target_col, ANCHOR_COL]).copy()
     if len(data) < 50:
         print(f"[{horizon_name}] Not enough data yet ({len(data)} rows) — skipping. "
               f"Run the backfill script with more history.")
@@ -87,77 +90,94 @@ def train_horizon(df: pd.DataFrame, horizon_name: str, target_col: str):
 
     X = data[feature_cols].values
     y = data[target_col].values
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    anchor = data[ANCHOR_COL].values
+
+    X_train, X_test, y_train, y_test, anchor_train, anchor_test = train_test_split(
+        X, y, anchor, test_size=0.2, shuffle=False
+    )
 
     scaler = StandardScaler().fit(X_train)
     X_train_s = scaler.transform(X_train)
     X_test_s = scaler.transform(X_test)
 
-    results = {}
+    results = {}  # key -> (model, metrics, scaler_or_None, predict_delta)
 
-    with mlflow.start_run(run_name=f"ridge_{horizon_name}"):
-        ridge = Ridge(alpha=1.0).fit(X_train_s, y_train)
-        preds = ridge.predict(X_test_s)
-        metrics = compute_metrics(y_test, preds)
-        mlflow.log_params({"model": "ridge", "alpha": 1.0, "horizon": horizon_name})
-        mlflow.log_metrics(metrics)
-        mlflow.sklearn.log_model(ridge, "model")
-        results["ridge"] = (ridge, metrics, scaler)
-        print(f"[{horizon_name}] Ridge -> {metrics}")
+    for predict_delta in (False, True):
+        suffix = "delta" if predict_delta else "absolute"
+        y_train_fit = (y_train - anchor_train) if predict_delta else y_train
 
-    with mlflow.start_run(run_name=f"random_forest_{horizon_name}"):
-        rf = RandomForestRegressor(n_estimators=300, max_depth=12, random_state=42, n_jobs=-1)
-        rf.fit(X_train, y_train)  # tree models don't need scaling
-        preds = rf.predict(X_test)
-        metrics = compute_metrics(y_test, preds)
-        mlflow.log_params({"model": "random_forest", "n_estimators": 300, "max_depth": 12, "horizon": horizon_name})
-        mlflow.log_metrics(metrics)
-        mlflow.sklearn.log_model(rf, "model")
-        results["random_forest"] = (rf, metrics, None)
-        print(f"[{horizon_name}] RandomForest -> {metrics}")
-
-    try:
-        with mlflow.start_run(run_name=f"lstm_{horizon_name}"):
-            X_train_lstm = X_train_s.reshape((X_train_s.shape[0], 1, X_train_s.shape[1]))
-            X_test_lstm = X_test_s.reshape((X_test_s.shape[0], 1, X_test_s.shape[1]))
-            lstm = build_lstm(X_train_s.shape[1])
-            lstm.fit(X_train_lstm, y_train, epochs=30, batch_size=16, verbose=0)
-            preds = lstm.predict(X_test_lstm, verbose=0).flatten()
+        # --- Ridge ---
+        with mlflow.start_run(run_name=f"ridge_{suffix}_{horizon_name}"):
+            ridge = Ridge(alpha=1.0).fit(X_train_s, y_train_fit)
+            raw_preds = ridge.predict(X_test_s)
+            preds = raw_preds + anchor_test if predict_delta else raw_preds
             metrics = compute_metrics(y_test, preds)
-            mlflow.log_params({"model": "lstm", "epochs": 30, "horizon": horizon_name})
+            mlflow.log_params({"model": "ridge", "alpha": 1.0, "horizon": horizon_name, "target": suffix})
             mlflow.log_metrics(metrics)
-            # Save manually + log as a plain artifact instead of mlflow.keras.log_model,
-            # to avoid the protobuf/TensorFlow import conflict described above.
-            tmp_lstm_path = os.path.join(MODELS_DIR, f"_tmp_lstm_{horizon_name}.keras")
-            lstm.save(tmp_lstm_path)
-            mlflow.log_artifact(tmp_lstm_path, artifact_path="model")
-            results["lstm"] = (lstm, metrics, scaler)
-            print(f"[{horizon_name}] LSTM -> {metrics}")
-    except Exception as e:
-        print(f"[{horizon_name}] LSTM training skipped: {e}")
+            mlflow.sklearn.log_model(ridge, "model")
+            results[f"ridge_{suffix}"] = (ridge, metrics, scaler, predict_delta)
+            print(f"[{horizon_name}] Ridge ({suffix}) -> {metrics}")
 
-    # Pick best by RMSE
+        # --- Random Forest ---
+        with mlflow.start_run(run_name=f"random_forest_{suffix}_{horizon_name}"):
+            rf = RandomForestRegressor(n_estimators=300, max_depth=12, random_state=42, n_jobs=-1)
+            rf.fit(X_train, y_train_fit)  # tree models don't need scaling
+            raw_preds = rf.predict(X_test)
+            preds = raw_preds + anchor_test if predict_delta else raw_preds
+            metrics = compute_metrics(y_test, preds)
+            mlflow.log_params({"model": "random_forest", "n_estimators": 300, "max_depth": 12,
+                                "horizon": horizon_name, "target": suffix})
+            mlflow.log_metrics(metrics)
+            mlflow.sklearn.log_model(rf, "model")
+            results[f"random_forest_{suffix}"] = (rf, metrics, None, predict_delta)
+            print(f"[{horizon_name}] RandomForest ({suffix}) -> {metrics}")
+
+        # --- LSTM ---
+        try:
+            with mlflow.start_run(run_name=f"lstm_{suffix}_{horizon_name}"):
+                X_train_lstm = X_train_s.reshape((X_train_s.shape[0], 1, X_train_s.shape[1]))
+                X_test_lstm = X_test_s.reshape((X_test_s.shape[0], 1, X_test_s.shape[1]))
+                lstm = build_lstm(X_train_s.shape[1])
+                lstm.fit(X_train_lstm, y_train_fit, epochs=30, batch_size=16, verbose=0)
+                raw_preds = lstm.predict(X_test_lstm, verbose=0).flatten()
+                preds = raw_preds + anchor_test if predict_delta else raw_preds
+                metrics = compute_metrics(y_test, preds)
+                mlflow.log_params({"model": "lstm", "epochs": 30, "horizon": horizon_name, "target": suffix})
+                mlflow.log_metrics(metrics)
+                # Save manually + log as a plain artifact instead of mlflow.keras.log_model,
+                # to avoid the protobuf/TensorFlow import conflict (see note above imports).
+                tmp_lstm_path = os.path.join(MODELS_DIR, f"_tmp_lstm_{suffix}_{horizon_name}.keras")
+                lstm.save(tmp_lstm_path)
+                mlflow.log_artifact(tmp_lstm_path, artifact_path="model")
+                os.remove(tmp_lstm_path)
+                results[f"lstm_{suffix}"] = (lstm, metrics, scaler, predict_delta)
+                print(f"[{horizon_name}] LSTM ({suffix}) -> {metrics}")
+        except Exception as e:
+            print(f"[{horizon_name}] LSTM ({suffix}) training skipped: {e}")
+
+    # Pick best by RMSE across ALL model/target-framing combinations tried above
     best_name = min(results, key=lambda k: results[k][1]["rmse"])
-    best_model, best_metrics, best_scaler = results[best_name]
-    print(f"[{horizon_name}] Best model: {best_name} ({best_metrics})")
+    best_model, best_metrics, best_scaler, best_predict_delta = results[best_name]
+    print(f"[{horizon_name}] Best overall: {best_name} ({best_metrics})")
 
     bundle = {
         "model_name": best_name,
         "model": best_model,
         "scaler": best_scaler,
         "feature_cols": feature_cols,
+        "predict_delta": best_predict_delta,
+        "anchor_col": ANCHOR_COL,
         "metrics": best_metrics,
+        # Flag horizons with weak/negative R2 so the dashboard can show an
+        # honest confidence indicator instead of presenting every horizon as equally reliable.
+        "experimental": best_metrics["r2"] < 0.15,
         "trained_at": datetime.utcnow().isoformat(),
     }
     out_path = os.path.join(MODELS_DIR, f"best_model_{horizon_name}.pkl")
     with open(out_path, "wb") as f:
         pickle.dump(bundle, f)
-    print(f"[{horizon_name}] Saved best model bundle to {out_path}")
-
-    # Clean up temp LSTM artifact file used only for the mlflow.log_artifact call
-    tmp_lstm_path = os.path.join(MODELS_DIR, f"_tmp_lstm_{horizon_name}.keras")
-    if os.path.exists(tmp_lstm_path):
-        os.remove(tmp_lstm_path)
+    print(f"[{horizon_name}] Saved best model bundle to {out_path}"
+          f"{' [EXPERIMENTAL - low confidence]' if bundle['experimental'] else ''}")
 
     return bundle
 

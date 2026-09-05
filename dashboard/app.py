@@ -38,11 +38,16 @@ def predict_with_bundle(bundle, X_row: pd.DataFrame):
         X = bundle["scaler"].transform(X)
     model = bundle["model"]
     model_name = bundle["model_name"]
-    if model_name == "lstm":
+    if "lstm" in model_name:
         X = X.reshape((X.shape[0], 1, X.shape[1]))
         pred = model.predict(X, verbose=0).flatten()[0]
     else:
         pred = model.predict(X)[0]
+
+    if bundle.get("predict_delta"):
+        anchor_value = X_row[bundle["anchor_col"]].values[0]
+        pred = pred + anchor_value
+
     return float(pred)
 
 
@@ -93,7 +98,12 @@ def main():
             st.info(f"No trained model found for {horizon_name} yet — run training_pipeline/train.py")
             continue
         pred = predict_with_bundle(bundle, latest_row)
-        forecast_rows.append({"horizon": f"Day +{day_offset}", "predicted_aqi": pred, "model": bundle["model_name"]})
+        forecast_rows.append({
+            "horizon": f"Day +{day_offset}",
+            "predicted_aqi": pred,
+            "model": bundle["model_name"],
+            "experimental": bundle.get("experimental", False),
+        })
 
     if forecast_rows:
         fdf = pd.DataFrame(forecast_rows)
@@ -108,6 +118,11 @@ def main():
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(fdf, use_container_width=True, hide_index=True)
 
+        if fdf["experimental"].any():
+            weak_horizons = ", ".join(fdf.loc[fdf["experimental"], "horizon"])
+            st.caption(f"⚠️ {weak_horizons} forecast(s) have low model confidence (R² below 0.15 in "
+                       f"backtesting) — treat as a rough directional estimate, not a precise prediction.")
+
     st.subheader("Recent AQI Trend")
     hist = get_features(CITY_NAME).tail(168)  # last 7 days hourly
     if not hist.empty:
@@ -119,7 +134,7 @@ def main():
     st.subheader("Why this forecast? (SHAP feature importance)")
     horizon_choice = st.selectbox("Explain horizon:", list(HORIZONS.keys()))
     bundle = load_model_bundle(horizon_choice)
-    if bundle and bundle["model_name"] in ("random_forest", "ridge"):
+    if bundle and ("random_forest" in bundle["model_name"] or "ridge" in bundle["model_name"]):
         try:
             background = get_features(CITY_NAME).dropna(subset=bundle["feature_cols"]).tail(200)
             X_bg = background[bundle["feature_cols"]]
