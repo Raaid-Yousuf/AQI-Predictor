@@ -6,4 +6,6 @@ psycopg2-binary>=2.9.9
 sqlalchemy>=2.0.0
 python-dotenv>=1.0.0
 shap>=0.45.0
-protobuf<5.0.0,>=4.25.3
+# Deliberately NOT pinning protobuf — let it stay whatever Colab already has.
+# Pinning it either direction just flips which preinstalled package complains.
+# The complaints are non-fatal pip resolver warnings, not real failures.
