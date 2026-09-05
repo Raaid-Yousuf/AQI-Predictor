@@ -44,6 +44,18 @@ CREATE TABLE IF NOT EXISTS features (
     aqi_lag_24h         DOUBLE PRECISION,
     aqi_rolling_mean_6h DOUBLE PRECISION,
     aqi_change_rate     DOUBLE PRECISION,       -- derived: (aqi_t - aqi_t-1) / aqi_t-1
+    temp_future_24h     DOUBLE PRECISION,       -- weather at target time (actual during training, forecast at inference)
+    temp_future_48h     DOUBLE PRECISION,
+    temp_future_72h     DOUBLE PRECISION,
+    humidity_future_24h    DOUBLE PRECISION,
+    humidity_future_48h    DOUBLE PRECISION,
+    humidity_future_72h    DOUBLE PRECISION,
+    wind_speed_future_24h  DOUBLE PRECISION,
+    wind_speed_future_48h  DOUBLE PRECISION,
+    wind_speed_future_72h  DOUBLE PRECISION,
+    pressure_future_24h    DOUBLE PRECISION,
+    pressure_future_48h    DOUBLE PRECISION,
+    pressure_future_72h    DOUBLE PRECISION,
     target_aqi          DOUBLE PRECISION,       -- current AQI (label for "now")
     target_aqi_24h      DOUBLE PRECISION,       -- AQI 24h ahead (for day+1 model)
     target_aqi_48h      DOUBLE PRECISION,       -- AQI 48h ahead (for day+2 model)

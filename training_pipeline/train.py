@@ -34,13 +34,26 @@ from config import CITY_NAME, MLFLOW_TRACKING_URI, MLFLOW_EXPERIMENT_NAME
 from db.db_utils import get_features
 from training_pipeline.evaluate import compute_metrics
 
-FEATURE_COLS = [
+BASE_FEATURE_COLS = [
     "hour", "day_of_week", "day_of_month", "month", "is_weekend",
     "pm25", "pm10", "o3", "no2", "so2", "co",
     "temperature_c", "humidity_pct", "wind_speed_ms", "pressure_hpa",
     "aqi_lag_1h", "aqi_lag_24h", "aqi_rolling_mean_6h", "aqi_change_rate",
 ]
 HORIZONS = {"24h": "target_aqi_24h", "48h": "target_aqi_48h", "72h": "target_aqi_72h"}
+
+
+def get_feature_cols(horizon_name: str) -> list:
+    """Base features + that horizon's future-weather features (the key fix for
+    48h/72h — the model needs to know what weather is coming, not just current
+    conditions, since weather is the physical driver of AQI change)."""
+    future_weather = [
+        f"temp_future_{horizon_name}",
+        f"humidity_future_{horizon_name}",
+        f"wind_speed_future_{horizon_name}",
+        f"pressure_future_{horizon_name}",
+    ]
+    return BASE_FEATURE_COLS + future_weather
 
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -65,13 +78,14 @@ def build_lstm(input_dim: int):
 
 
 def train_horizon(df: pd.DataFrame, horizon_name: str, target_col: str):
-    data = df.dropna(subset=FEATURE_COLS + [target_col]).copy()
+    feature_cols = get_feature_cols(horizon_name)
+    data = df.dropna(subset=feature_cols + [target_col]).copy()
     if len(data) < 50:
         print(f"[{horizon_name}] Not enough data yet ({len(data)} rows) — skipping. "
               f"Run the backfill script with more history.")
         return None
 
-    X = data[FEATURE_COLS].values
+    X = data[feature_cols].values
     y = data[target_col].values
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
 
@@ -131,7 +145,7 @@ def train_horizon(df: pd.DataFrame, horizon_name: str, target_col: str):
         "model_name": best_name,
         "model": best_model,
         "scaler": best_scaler,
-        "feature_cols": FEATURE_COLS,
+        "feature_cols": feature_cols,
         "metrics": best_metrics,
         "trained_at": datetime.utcnow().isoformat(),
     }

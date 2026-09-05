@@ -28,7 +28,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import CITY_NAME
 from db.db_utils import get_features
 from training_pipeline.evaluate import compute_metrics
-from training_pipeline.train import FEATURE_COLS, HORIZONS
+from training_pipeline.train import get_feature_cols, HORIZONS
 
 
 def persistence_baseline(data: pd.DataFrame, target_col: str) -> dict:
@@ -38,9 +38,9 @@ def persistence_baseline(data: pd.DataFrame, target_col: str) -> dict:
     return compute_metrics(y_true, y_pred)
 
 
-def cross_validated_scores(data: pd.DataFrame, target_col: str, n_splits: int = 5,
-                            predict_delta: bool = False) -> dict:
-    X = data[FEATURE_COLS].values
+def cross_validated_scores(data: pd.DataFrame, feature_cols: list, target_col: str,
+                            n_splits: int = 5, predict_delta: bool = False) -> dict:
+    X = data[feature_cols].values
     y = data[target_col].values
     current_aqi = data["aqi_lag_1h"].values  # anchor for delta reconstruction
 
@@ -91,7 +91,8 @@ def main():
     print(f"Loaded {len(df)} feature rows for {CITY_NAME}.\n")
 
     for horizon_name, target_col in HORIZONS.items():
-        data = df.dropna(subset=FEATURE_COLS + [target_col]).copy()
+        feature_cols = get_feature_cols(horizon_name)
+        data = df.dropna(subset=feature_cols + [target_col]).copy()
         print(f"=== Horizon: {horizon_name} ({len(data)} usable rows) ===")
 
         if len(data) < 100:
@@ -102,12 +103,12 @@ def main():
         print(f"  Persistence baseline (predict = current AQI): {baseline}")
 
         print("  Running 5-fold TimeSeriesSplit CV — predicting ABSOLUTE AQI level...")
-        cv_absolute = cross_validated_scores(data, target_col, predict_delta=False)
+        cv_absolute = cross_validated_scores(data, feature_cols, target_col, predict_delta=False)
         print(f"  CV avg (absolute) -> Ridge: {cv_absolute['ridge']}")
         print(f"  CV avg (absolute) -> RandomForest: {cv_absolute['random_forest']}")
 
         print("  Running 5-fold TimeSeriesSplit CV — predicting DELTA from current AQI...")
-        cv_delta = cross_validated_scores(data, target_col, predict_delta=True)
+        cv_delta = cross_validated_scores(data, feature_cols, target_col, predict_delta=True)
         print(f"  CV avg (delta) -> Ridge: {cv_delta['ridge']}")
         print(f"  CV avg (delta) -> RandomForest: {cv_delta['random_forest']}")
 

@@ -13,7 +13,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import CITY_NAME
 from db.db_utils import get_features
-from training_pipeline.train import FEATURE_COLS, HORIZONS
+from training_pipeline.train import get_feature_cols, HORIZONS
 
 pd.set_option("display.width", 120)
 pd.set_option("display.max_columns", 20)
@@ -33,19 +33,19 @@ def main():
     print(extreme[["ts", "aqi_lag_1h", "target_aqi", "aqi_change_rate"]].head(10))
     print()
 
-    print("=== NaN / Inf check across feature columns ===")
-    for col in FEATURE_COLS:
+    print("=== NaN / Inf check across base feature columns ===")
+    base_check_cols = get_feature_cols("24h")  # base cols overlap across horizons; 24h's set covers them
+    for col in base_check_cols:
         n_nan = df[col].isna().sum()
-        n_inf = np.isinf(df[col].replace([np.inf, -np.inf], np.nan).isna() & ~df[col].isna()).sum() \
-            if df[col].dtype != bool else 0
         if n_nan > 0:
             print(f"  {col}: {n_nan} NaN")
     print()
 
     print("=== Correlation of each feature with each target (Pearson) ===")
     for horizon_name, target_col in HORIZONS.items():
-        data = df.dropna(subset=FEATURE_COLS + [target_col])
-        corrs = data[FEATURE_COLS + [target_col]].corr()[target_col].drop(target_col)
+        feature_cols = get_feature_cols(horizon_name)
+        data = df.dropna(subset=feature_cols + [target_col])
+        corrs = data[feature_cols + [target_col]].corr()[target_col].drop(target_col)
         corrs = corrs.sort_values(key=abs, ascending=False)
         print(f"\n--- {horizon_name} ---")
         print(corrs.head(10))
