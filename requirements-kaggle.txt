@@ -1,0 +1,12 @@
+# Kaggle notebooks already have tensorflow, numpy, pandas, scikit-learn, matplotlib
+# preinstalled and version-pinned per Kaggle's own Docker image. Do NOT reinstall
+# those here. Only install what's actually missing.
+#
+# Do not pin mlflow's upper bound and do not pin protobuf directly — see the note
+# in training_pipeline/train.py about why mlflow.keras is deliberately not used,
+# which is what actually avoids the protobuf conflict (not a specific version pin).
+mlflow>=2.12.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+python-dotenv>=1.0.0
+shap>=0.45.0

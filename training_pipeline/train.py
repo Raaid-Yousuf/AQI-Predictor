@@ -19,7 +19,11 @@ import numpy as np
 import pandas as pd
 import mlflow
 import mlflow.sklearn
-import mlflow.keras
+# Deliberately NOT importing mlflow.keras: that submodule forces mlflow to import
+# Keras/TensorFlow through its own internal path, which is what triggers the
+# protobuf version collision between mlflow-skinny and TensorFlow. We log Keras
+# models manually instead (see train_horizon) — this avoids the conflict
+# entirely, on Colab, Kaggle, or anywhere else, regardless of package versions.
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -108,7 +112,11 @@ def train_horizon(df: pd.DataFrame, horizon_name: str, target_col: str):
             metrics = compute_metrics(y_test, preds)
             mlflow.log_params({"model": "lstm", "epochs": 30, "horizon": horizon_name})
             mlflow.log_metrics(metrics)
-            mlflow.keras.log_model(lstm, "model")
+            # Save manually + log as a plain artifact instead of mlflow.keras.log_model,
+            # to avoid the protobuf/TensorFlow import conflict described above.
+            tmp_lstm_path = os.path.join(MODELS_DIR, f"_tmp_lstm_{horizon_name}.keras")
+            lstm.save(tmp_lstm_path)
+            mlflow.log_artifact(tmp_lstm_path, artifact_path="model")
             results["lstm"] = (lstm, metrics, scaler)
             print(f"[{horizon_name}] LSTM -> {metrics}")
     except Exception as e:
@@ -131,6 +139,11 @@ def train_horizon(df: pd.DataFrame, horizon_name: str, target_col: str):
     with open(out_path, "wb") as f:
         pickle.dump(bundle, f)
     print(f"[{horizon_name}] Saved best model bundle to {out_path}")
+
+    # Clean up temp LSTM artifact file used only for the mlflow.log_artifact call
+    tmp_lstm_path = os.path.join(MODELS_DIR, f"_tmp_lstm_{horizon_name}.keras")
+    if os.path.exists(tmp_lstm_path):
+        os.remove(tmp_lstm_path)
 
     return bundle
 
