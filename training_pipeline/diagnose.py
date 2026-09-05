@@ -38,9 +38,11 @@ def persistence_baseline(data: pd.DataFrame, target_col: str) -> dict:
     return compute_metrics(y_true, y_pred)
 
 
-def cross_validated_scores(data: pd.DataFrame, target_col: str, n_splits: int = 5) -> dict:
+def cross_validated_scores(data: pd.DataFrame, target_col: str, n_splits: int = 5,
+                            predict_delta: bool = False) -> dict:
     X = data[FEATURE_COLS].values
     y = data[target_col].values
+    current_aqi = data["aqi_lag_1h"].values  # anchor for delta reconstruction
 
     tscv = TimeSeriesSplit(n_splits=n_splits)
     ridge_scores, rf_scores = [], []
@@ -48,17 +50,27 @@ def cross_validated_scores(data: pd.DataFrame, target_col: str, n_splits: int = 
     for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
         X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
+        anchor_train, anchor_test = current_aqi[train_idx], current_aqi[test_idx]
+
+        if predict_delta:
+            y_train_fit = y_train - anchor_train
+        else:
+            y_train_fit = y_train
 
         scaler = StandardScaler().fit(X_train)
         X_train_s, X_test_s = scaler.transform(X_train), scaler.transform(X_test)
 
-        ridge = Ridge(alpha=1.0).fit(X_train_s, y_train)
-        ridge_metrics = compute_metrics(y_test, ridge.predict(X_test_s))
+        ridge = Ridge(alpha=1.0).fit(X_train_s, y_train_fit)
+        ridge_raw_pred = ridge.predict(X_test_s)
+        ridge_pred = ridge_raw_pred + anchor_test if predict_delta else ridge_raw_pred
+        ridge_metrics = compute_metrics(y_test, ridge_pred)
         ridge_scores.append(ridge_metrics)
 
         rf = RandomForestRegressor(n_estimators=200, max_depth=8, random_state=42, n_jobs=-1)
-        rf.fit(X_train, y_train)
-        rf_metrics = compute_metrics(y_test, rf.predict(X_test))
+        rf.fit(X_train, y_train_fit)
+        rf_raw_pred = rf.predict(X_test)
+        rf_pred = rf_raw_pred + anchor_test if predict_delta else rf_raw_pred
+        rf_metrics = compute_metrics(y_test, rf_pred)
         rf_scores.append(rf_metrics)
 
         print(f"    Fold {fold+1}: train={len(train_idx)} test={len(test_idx)} "
@@ -89,18 +101,27 @@ def main():
         baseline = persistence_baseline(data, target_col)
         print(f"  Persistence baseline (predict = current AQI): {baseline}")
 
-        print("  Running 5-fold TimeSeriesSplit cross-validation...")
-        cv_results = cross_validated_scores(data, target_col)
-        print(f"  CV avg -> Ridge: {cv_results['ridge']}")
-        print(f"  CV avg -> RandomForest: {cv_results['random_forest']}")
+        print("  Running 5-fold TimeSeriesSplit CV — predicting ABSOLUTE AQI level...")
+        cv_absolute = cross_validated_scores(data, target_col, predict_delta=False)
+        print(f"  CV avg (absolute) -> Ridge: {cv_absolute['ridge']}")
+        print(f"  CV avg (absolute) -> RandomForest: {cv_absolute['random_forest']}")
 
-        best_model_rmse = min(baseline["rmse"], cv_results["ridge"]["rmse"], cv_results["random_forest"]["rmse"])
-        if best_model_rmse == baseline["rmse"]:
-            print("  ⚠️  VERDICT: Persistence baseline WINS. Trained models are not yet beating"
-                  " a naive guess — points to a data volume/regime issue, not necessarily a code bug.")
+        print("  Running 5-fold TimeSeriesSplit CV — predicting DELTA from current AQI...")
+        cv_delta = cross_validated_scores(data, target_col, predict_delta=True)
+        print(f"  CV avg (delta) -> Ridge: {cv_delta['ridge']}")
+        print(f"  CV avg (delta) -> RandomForest: {cv_delta['random_forest']}")
+
+        best_absolute_rmse = min(cv_absolute["ridge"]["rmse"], cv_absolute["random_forest"]["rmse"])
+        best_delta_rmse = min(cv_delta["ridge"]["rmse"], cv_delta["random_forest"]["rmse"])
+        best_overall_rmse = min(baseline["rmse"], best_absolute_rmse, best_delta_rmse)
+
+        if best_overall_rmse == baseline["rmse"]:
+            print("  ⚠️  VERDICT: Persistence baseline still wins even with delta modeling.")
+        elif best_overall_rmse == best_delta_rmse:
+            print("  ✅ VERDICT: DELTA modeling beats both the baseline and absolute-value modeling."
+                  " This confirms the fix — switch training_pipeline/train.py to predict deltas.")
         else:
-            print("  ✅ VERDICT: A trained model beats the naive baseline — the pipeline"
-                  " is learning real signal; earlier negative R2 was likely just an unlucky single split.")
+            print("  ℹ️  VERDICT: Absolute-value modeling already beats baseline — delta modeling not needed.")
         print()
 
 
