@@ -1,0 +1,33 @@
+name: Feature Pipeline (hourly)
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # every hour, on the hour
+  workflow_dispatch: {}     # allow manual trigger from the Actions tab
+
+jobs:
+  run-feature-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run feature pipeline
+        env:
+          CITY_NAME: ${{ vars.CITY_NAME }}
+          CITY_LAT: ${{ vars.CITY_LAT }}
+          CITY_LON: ${{ vars.CITY_LON }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          HAZARD_AQI_THRESHOLD: ${{ vars.HAZARD_AQI_THRESHOLD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m feature_pipeline.run_feature_pipeline
