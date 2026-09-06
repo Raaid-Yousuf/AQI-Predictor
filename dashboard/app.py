@@ -201,8 +201,18 @@ def enrich_with_forecast_weather(latest_row: pd.DataFrame) -> pd.DataFrame:
     if not forecast:
         return latest_row  # fall back to whatever is already there (likely NaN)
 
-    current_ts = pd.Timestamp(latest_row.iloc[0]["ts"])
-    forecast_index = {pd.Timestamp(k): v for k, v in forecast.items()}
+    # Strip timezone labels (don't convert) on both sides before comparing —
+    # our DB timestamps are tz-aware (Postgres TIMESTAMPTZ) while Open-Meteo's
+    # forecast times come back as plain local time with no tz label. The rest of
+    # this codebase has always treated timestamps as naive local time, so
+    # stripping tz here (not converting) keeps that same, consistent convention
+    # rather than introducing a second, conflicting one.
+    def _strip_tz(ts):
+        ts = pd.Timestamp(ts)
+        return ts.tz_localize(None) if ts.tzinfo is not None else ts
+
+    current_ts = _strip_tz(latest_row.iloc[0]["ts"])
+    forecast_index = {_strip_tz(k): v for k, v in forecast.items()}
 
     field_map = {
         "temperature_c": "temp_future",
