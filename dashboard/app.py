@@ -29,7 +29,16 @@ def load_model_bundle(horizon_name: str):
     if not os.path.exists(path):
         return None
     with open(path, "rb") as f:
-        return pickle.load(f)
+        bundle = pickle.load(f)
+
+    # LSTM models are stored separately (see training_pipeline/train.py for why —
+    # pickling Keras models directly is unreliable across processes/machines).
+    if bundle.get("lstm_model_path"):
+        from tensorflow import keras
+        lstm_path = os.path.join(MODELS_DIR, bundle["lstm_model_path"])
+        bundle["model"] = keras.models.load_model(lstm_path)
+
+    return bundle
 
 
 def predict_with_bundle(bundle, X_row: pd.DataFrame):

@@ -160,9 +160,23 @@ def train_horizon(df: pd.DataFrame, horizon_name: str, target_col: str):
     best_model, best_metrics, best_scaler, best_predict_delta = results[best_name]
     print(f"[{horizon_name}] Best overall: {best_name} ({best_metrics})")
 
+    # Keras/TensorFlow models are NOT reliably picklable — pickling one and loading it
+    # in a different process (e.g. downloaded from Kaggle to a local machine) can silently
+    # return an object with lost/reset weights instead of erroring out. So: if the winner
+    # is an LSTM, save it using Keras's own native format and store only the filename in
+    # the pickle; the sklearn models (Ridge/RF) pickle fine and stay embedded directly.
+    lstm_model_path = None
+    model_to_pickle = best_model
+    if "lstm" in best_name:
+        lstm_filename = f"best_model_{horizon_name}_lstm.keras"
+        best_model.save(os.path.join(MODELS_DIR, lstm_filename))
+        lstm_model_path = lstm_filename
+        model_to_pickle = None  # don't attempt to pickle the Keras object at all
+
     bundle = {
         "model_name": best_name,
-        "model": best_model,
+        "model": model_to_pickle,
+        "lstm_model_path": lstm_model_path,
         "scaler": best_scaler,
         "feature_cols": feature_cols,
         "predict_delta": best_predict_delta,
@@ -177,7 +191,8 @@ def train_horizon(df: pd.DataFrame, horizon_name: str, target_col: str):
     with open(out_path, "wb") as f:
         pickle.dump(bundle, f)
     print(f"[{horizon_name}] Saved best model bundle to {out_path}"
-          f"{' [EXPERIMENTAL - low confidence]' if bundle['experimental'] else ''}")
+          f"{' [EXPERIMENTAL - low confidence]' if bundle['experimental'] else ''}"
+          f"{f' [LSTM weights in {lstm_model_path}]' if lstm_model_path else ''}")
 
     return bundle
 
