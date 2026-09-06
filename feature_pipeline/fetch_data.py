@@ -134,6 +134,38 @@ def fetch_aqicn_current():
     }
 
 
+def fetch_open_meteo_weather_forecast(forecast_days: int = 4):
+    """
+    Real hourly weather FORECAST (not historical) from Open-Meteo, covering the
+    next `forecast_days` days. Used at live-inference time to fill the
+    'future weather' features our models expect (temp_future_24h, etc.) — during
+    training we approximate those with actual historical weather, but at
+    inference time we only have a real forecast to work with, which is exactly
+    what this fetches.
+    Returns a dict: {timestamp_str: {temperature_c, humidity_pct, wind_speed_ms, pressure_hpa}}
+    """
+    params = {
+        "latitude": CITY_LAT,
+        "longitude": CITY_LON,
+        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,pressure_msl",
+        "forecast_days": forecast_days,
+        "timezone": "auto",
+    }
+    resp = requests.get(OPEN_METEO_WEATHER_URL, params=params, timeout=20).json()
+    hourly = resp.get("hourly", {})
+    times = hourly.get("time", [])
+
+    forecast = {}
+    for i, t in enumerate(times):
+        forecast[t] = {
+            "temperature_c": _safe_get(hourly, "temperature_2m", i),
+            "humidity_pct": _safe_get(hourly, "relative_humidity_2m", i),
+            "wind_speed_ms": _safe_get(hourly, "wind_speed_10m", i),
+            "pressure_hpa": _safe_get(hourly, "pressure_msl", i),
+        }
+    return forecast
+
+
 def _safe_get(hourly_dict, key, i):
     values = hourly_dict.get(key)
     if values is None or i >= len(values):

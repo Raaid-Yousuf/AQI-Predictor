@@ -1,7 +1,7 @@
 """
 Pearls AQI Predictor — live dashboard.
 Run locally: streamlit run dashboard/app.py
-Deploy: push this repo to a Hugging Face Space (Streamlit SDK).
+Deploy: push this repo to Streamlit Community Cloud (share.streamlit.io).
 
 Visual design: an environmental-monitor aesthetic (dark, instrument-panel feel)
 rather than a generic SaaS card dashboard. One hero moment (the AQI ring), a
@@ -11,7 +11,7 @@ reads as trustworthy/familiar), and quiet, structured supporting panels.
 import sys
 import os
 import pickle
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import streamlit as st
 import pandas as pd
@@ -22,6 +22,7 @@ import shap
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import CITY_NAME, HAZARD_AQI_THRESHOLD, FORECAST_DAYS
 from db.db_utils import get_latest_features, get_features
+from feature_pipeline.fetch_data import fetch_open_meteo_weather_forecast
 
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
 HORIZONS = {"24h": 1, "48h": 2, "72h": 3}
@@ -182,6 +183,50 @@ def predict_with_bundle(bundle, X_row: pd.DataFrame):
     return float(pred)
 
 
+@st.cache_data(ttl=1800)  # forecast weather doesn't change minute to minute — cache 30 min
+def get_weather_forecast():
+    return fetch_open_meteo_weather_forecast(forecast_days=4)
+
+
+def enrich_with_forecast_weather(latest_row: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fills in the 'future weather' feature columns (temp_future_24h, etc.) using a
+    REAL weather forecast — these are NaN in the stored feature row for the most
+    recent timestamp, since actual future weather hasn't happened yet. At training
+    time we approximate them with historical actuals; at live inference this is
+    the only correct source: a real forecast for the hours ahead.
+    """
+    latest_row = latest_row.copy()
+    forecast = get_weather_forecast()
+    if not forecast:
+        return latest_row  # fall back to whatever is already there (likely NaN)
+
+    current_ts = pd.Timestamp(latest_row.iloc[0]["ts"])
+    forecast_index = {pd.Timestamp(k): v for k, v in forecast.items()}
+
+    field_map = {
+        "temperature_c": "temp_future",
+        "humidity_pct": "humidity_future",
+        "wind_speed_ms": "wind_speed_future",
+        "pressure_hpa": "pressure_future",
+    }
+
+    for horizon_hours, suffix in [(24, "24h"), (48, "48h"), (72, "72h")]:
+        target_ts = current_ts + timedelta(hours=horizon_hours)
+        # snap to the nearest available forecast hour
+        nearest_ts = min(forecast_index.keys(), key=lambda t: abs((t - target_ts).total_seconds()),
+                          default=None)
+        if nearest_ts is None:
+            continue
+        values = forecast_index[nearest_ts]
+        for source_field, prefix in field_map.items():
+            col = f"{prefix}_{suffix}"
+            if col in latest_row.columns and values.get(source_field) is not None:
+                latest_row.at[latest_row.index[0], col] = values[source_field]
+
+    return latest_row
+
+
 def render_header(last_ts):
     if last_ts is not None:
         ts = pd.Timestamp(last_ts)
@@ -276,6 +321,7 @@ def main():
     latest_features["is_weekend"] = latest_features["is_weekend"].astype(int)
 
     latest_row = latest_features.tail(1)
+    latest_row = enrich_with_forecast_weather(latest_row)  # fill NaN future-weather with a real forecast
     row0 = latest_row.iloc[0]
     current_aqi = row0.get("target_aqi") or row0.get("aqi_lag_1h")
 
