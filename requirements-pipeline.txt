@@ -1,0 +1,10 @@
+# The hourly feature pipeline (feature_pipeline/run_feature_pipeline.py) only fetches
+# data, computes features, and writes to Postgres — it never touches TensorFlow,
+# MLflow, SHAP, or Streamlit. Installing the full requirements.txt here would waste
+# CI time on packages this job never imports.
+requests>=2.31.0
+pandas>=2.1.0
+numpy>=1.26.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+python-dotenv>=1.0.0
