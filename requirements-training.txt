@@ -1,0 +1,11 @@
+# The training job only needs these — it never touches Streamlit, SHAP, or Plotly
+# (those are dashboard-only). Kept separate from requirements.txt to keep the
+# daily CI run fast.
+pandas>=2.1.0
+numpy>=1.26.0
+scikit-learn>=1.4.0
+tensorflow-cpu>=2.16.0
+mlflow>=2.12.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+python-dotenv>=1.0.0
