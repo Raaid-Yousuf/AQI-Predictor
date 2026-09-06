@@ -3,7 +3,6 @@ __pycache__/
 .env
 mlflow.db
 mlruns/
-models/*.pkl
 .venv/
 venv/
 .DS_Store
